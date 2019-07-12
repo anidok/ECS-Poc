@@ -1,0 +1,382 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to deploy ECS cluster 
+
+Parameters:
+  UserName:
+    Type: String
+    Default: 'Aniket'
+  Contact:
+    Description: Contact for stack owner(s).
+    Type: String
+    Default: 'aniket.dokania@datagrokr.com'
+    ConstraintDescription: Must be a valid email address
+  Project:
+    Description: Project code the resources should be associated with.
+    Type: String
+    Default: 'mywebapp'
+  BusinessUnit:
+    Type: String
+    Default: 'DataGrokr'
+  EcsAmiId:
+    Type: String
+    Description: Specifies the AMI ID for your container instances.
+  InstanceDesiredCapacity:
+    Type: Number
+    Description: Number of Instances to launch
+    ConstraintDescription: Number of EC2 instances to launch
+    Default: 1
+  InstanceMaxNumber:
+    Type: Number
+    Default: 2
+    Description: Maximum number of instances that can be launched in the ECS Cluster
+    ConstraintDescription: Maximum number of instances that can be launched in the ECS Cluster
+  ECSInstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues: [ 't2.micro', 't2.small', 't2.large', 'r4.large' ]
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: mywebapp
+    ConstraintDescription: SSH key name to use to access to the EC2 instances
+  VpcId:
+    Type: String
+    Description: >
+      Optional - Specifies the ID of an existing VPC in which to launch
+      your container instances. If you specify a VPC ID, you must specify a list of
+      existing subnets in that VPC. If you do not specify a VPC ID, a new VPC is created
+      with atleast 1 subnet.
+    Default: ''
+  SubnetIds:
+    Type: List<String>
+    Description: >
+      Specifies the Comma separated list of existing VPC Subnet
+      Ids where ECS instances will run
+    Default: ''
+  SecurityIngressCidrIp:
+    Type: String
+    Description: >
+      Specifies the CIDR/IP range for Security Ports
+    Default: ''
+  Environment:
+    Description: Environment the resources should be associated with.
+    Type: String
+    Default: 'dev'
+    AllowedValues: [ 'dev', 'int', 'uat', 'prod' ]
+  Route53name:
+    Type: String
+    Default: data-prep
+  PrivateHostedZoneId:
+    Type: String
+    Default: ''
+  ALBInstall:
+    Type: String
+    Default: 'no'
+    AllowedValues: [ 'yes', 'no' ]
+  IsPublicIp:
+    Type: String
+    Default: false
+    AllowedValues: [ true, false ]
+  AppPort:
+    Type: Number
+    Default: 4000
+    Description: The port of host which is mapped to container port
+  HighCpuThreshold:
+    Type: Number
+    Default: 25
+  LowCpuThreshold:
+    Type: Number
+    Default: 20
+
+
+#############################################
+# Conditions
+#############################################
+
+Conditions:
+  IsALBNeeded: !Equals [!Ref ALBInstall, 'yes']
+
+Resources:
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${Project}-cluster-${Environment}
+
+  EC2ClusterCPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Project}-EC2ClusterCPUAlarmHigh-${Environment}
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref EC2AutoScalingGroup
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Average
+      Threshold: !Ref HighCpuThreshold
+      AlarmActions:
+        - !Ref EC2ScaleOutPolicy
+
+  EC2ScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      PolicyType: StepScaling
+      AutoScalingGroupName: !Ref EC2AutoScalingGroup
+      MetricAggregationType: Average
+      AdjustmentType: ChangeInCapacity
+      StepAdjustments:
+        - MetricIntervalLowerBound: 0
+          ScalingAdjustment: 1
+
+  EC2ClusterCPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Project}-EC2ClusterCPUAlarmLow-${Environment}
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref EC2AutoScalingGroup
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Average
+      Threshold: !Ref LowCpuThreshold
+      AlarmActions:
+        - !Ref EC2ScaleInPolicy
+
+  EC2ScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      PolicyType: StepScaling
+      AutoScalingGroupName: !Ref EC2AutoScalingGroup
+      MetricAggregationType: Average
+      AdjustmentType: ChangeInCapacity
+      StepAdjustments:
+        - MetricIntervalUpperBound: -1
+          ScalingAdjustment: -1
+
+  EC2AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - ECSLaunchConfig
+    Properties:
+      VPCZoneIdentifier: !Ref SubnetIds
+      LaunchConfigurationName: !Ref 'ECSLaunchConfig'
+      MinSize: '1'
+      MaxSize: !Ref 'InstanceMaxNumber'
+      DesiredCapacity: !Ref 'InstanceDesiredCapacity'
+      Tags:
+        - Key: Name
+          Value: !Sub ${Project}-cluster-${Environment}
+          PropagateAtLaunch: true
+        - Key: BusinessUnit
+          Value: !Ref BusinessUnit
+          PropagateAtLaunch: true
+        - Key: Contact
+          Value: !Ref Contact
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Ref Environment
+          PropagateAtLaunch: true
+        - Key: ProjectCode
+          Value: !Ref Project
+          PropagateAtLaunch: true
+        - Key: username
+          Value: !Ref UserName
+          PropagateAtLaunch: true
+
+  ECSLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: !Ref IsPublicIp
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeType: "gp2"
+            DeleteOnTermination: true
+            VolumeSize: 50
+      ImageId: !Ref EcsAmiId
+      SecurityGroups: [ !Ref ECSSecurityGroup ]
+      InstanceType: !Ref ECSInstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+
+            # Set which ECS cluster the instance is dedicated to.
+            echo ECS_CLUSTER=${Project}-cluster-${Environment} >> /etc/ecs/ecs.config
+            echo ECS_BACKEND_HOST= >> /etc/ecs/ecs.config
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Project}-cluster-ec2-role-${AWS::Region}-${Environment}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ec2.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess'
+      Policies:
+      - PolicyName: ecs-service
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'ecr:BatchCheckLayerAvailability'
+              - 'ecr:BatchGetImage'
+              - 'ecr:DescribeImages'
+              - 'ecr:DescribeRepositories'
+              - 'ecr:GetAuthorizationToken'
+              - 'ecr:GetDownloadUrlForLayer'
+              - 'ecr:GetRepositoryPolicy'
+              - 'ecr:ListImages'
+              - 'ecs:CreateCluster'
+              - 'ecs:DeregisterContainerInstance'
+              - 'ecs:DiscoverPollEndpoint'
+              - 'ecs:Poll'
+              - 'ecs:RegisterContainerInstance'
+              - 'ecs:StartTelemetrySession'
+              - 'ecs:Submit*'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: '*'
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref 'EC2Role']
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${Project}-cluster-security-group-${Environment}
+      GroupDescription: 'Security Group for the Project Apps.'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: "22"
+          CidrIp: !Ref SecurityIngressCidrIp
+          Description: SSH Access to Project Apps Host.
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref SecurityIngressCidrIp
+      VpcId: !Ref VpcId
+
+#############################################
+# ALB
+#############################################
+
+ #ALB
+  LoadBalancer:
+     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+     DependsOn:
+      - ALBSecurityGroup
+     Condition: IsALBNeeded
+     Properties:
+       Name: !Sub ${Project}-cluster-alb-${Environment}
+       Scheme: internet-facing
+       SecurityGroups:
+       - !GetAtt ALBSecurityGroup.GroupId
+       Subnets: !Ref SubnetIds
+       Type: application
+
+  #ALB security group
+  ALBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Condition: IsALBNeeded
+    Properties:
+      GroupName: !Sub ${Project}-cluster-alb-sg-${Environment}
+      GroupDescription: 'ecs-cluster-alb'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: "22"
+          CidrIp: 0.0.0.0/0
+          Description: SSH Access to Project Apps Host.
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VpcId
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: IsALBNeeded
+    Properties:
+      Name: !Sub ${Project}-alb-target-group-${Environment}
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      VpcId: !Ref VpcId
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsALBNeeded
+    DependsOn:
+      - ALBTargetGroup
+      - LoadBalancer
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  #DNS
+  # PrivateRecordSet:
+  #   Type: AWS::Route53::RecordSet
+  #   Condition: IsALBNeeded
+  #   DependsOn: LoadBalancer
+  #   Properties:
+  #     HostedZoneId: !Ref PrivateHostedZoneId
+  #     Name: !Sub ${Route53name}.${Environment}.datagrokr.com
+  #     Type: A
+  #     AliasTarget:
+  #       DNSName: !GetAtt LoadBalancer.DNSName
+  #       HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+#############################################
+# Outputs
+#############################################
+
+Outputs:
+  ECSCluster:
+    Description: Export the ECS cluster to be re-used within the single cfn project apps.
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub ${Project}-ECSCluster-${Environment}
+  ECSSecurityGroupID:
+    Description: Export the security group to be re-used within the single cfn project apps.
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: !Sub ${Project}-ECSSecurityGroup-${Environment}
+  VPCID:
+    Description: Export the VPCId to be re-used within the single cfn project apps.
+    Value: !Ref VpcId
+    Export:
+      Name: !Sub ${Project}-VpcId-${Environment}
+  ApplicationLoadBalancerArn:
+    Description: ALB arn
+    Condition: IsALBNeeded
+    Value: !Ref LoadBalancer
+    Export:
+      Name: !Sub ${Project}-LoadBalancerArn-${Environment}
+  ALBTargetGroupArn:
+    Description: ALB Target Group Arn
+    Condition: IsALBNeeded
+    Value: !Ref ALBTargetGroup
+    Export:
+      Name: !Sub ${Project}-ALBTargetGroupArn-${Environment}

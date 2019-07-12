@@ -1,0 +1,25 @@
+Scenario to handle when ECS instances in private subnets don't get registered with ECS cluster:
+
+Reason: Instances need access to internet to get themselves registered with ECS cluster. We want them to launch them in private subnet yet provide them internet access.
+
+Demo:
+* Create a VPC: 10.0.0.0/26
+Maths - 2 ^ (32-26) = 64 IPs (.0 to .63)
+
+* Divide this VPC into two subnets of 32 IPs each.
+1. Create a new subnet in VPC with CIDR 10.0.0.0/27 (IP .0 to .31) - allocates IPs = 27 (5 of the IPs get used by AWS internally) 
+2. Create a new subnet in VPC with CIDR 10.0.0.32/27 (IP .32 to .63) - allocates IPs = 27 (5 of the IPs get used by AWS internally) 
+
+* Create Internet Gateway and attach to above VPC (IG is unique for each VPC) - It provides two way internet access to subnet
+* Create NAT Gateway in a public subnet(above) for above VPC - It provides one way (subnet to outside world) internet access.
+
+* Edit route tables:
+1. Edit the default MAIN route table for VPC or probably rename it to indicate public subnet handling and use it for public subnets. Associate public subnets with this route table and edit routes. Add destination as "0.0.0.0/0" and add IG to Target.
+
+2. Create a new route table, probably with name something like "VPC-private" and associate private subnets to it. In the routes, add destination as "0.0.0.0/0" and add created NAT to Target.
+
+Doing this will make sure that the private subnets (hence the instances that will be launched in private subnets) will have internet access. But internet will not be able to access these subnets, which we don't want.
+
+
+Scenario: CF error - ECS service didn't stablize
+https://aws.amazon.com/premiumsupport/knowledge-center/cloudformation-ecs-service-stabilize/

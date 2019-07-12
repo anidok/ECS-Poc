@@ -1,0 +1,27 @@
+AsgMaxSize	1	
+DeviceName	/dev/xvdcz	
+EbsVolumeSize	22	
+EbsVolumeType	gp2	
+EcsAmiId	ami-0d09143c6fc181fe3	
+EcsClusterName	mywebapp	
+EcsEndpoint		
+EcsInstanceType	t2.micro	
+IamRoleInstanceProfile	arn:aws:iam::001082169132:instance-profile/ecsInstanceRole	
+IamSpotFleetRoleArn		
+IsWindows	false	
+KeyName	mywebapp	
+SecurityGroupId	sg-0dbe9e70d353daa91	
+SecurityIngressCidrIp	0.0.0.0/0	
+SecurityIngressFromPort	80	
+SecurityIngressToPort	80	
+SpotAllocationStrategy	diversified	
+SpotPrice		
+SubnetCidr1	10.0.0.0/24	
+SubnetCidr2	10.0.1.0/24	
+SubnetCidr3		
+SubnetIds	subnet-0d9468468a601e1f8,subnet-0814707766ead6436	
+UserData	#!/bin/bash echo ECS_CLUSTER=mywebapp >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/ecs.config;	
+UseSpot	false	
+VpcAvailabilityZones	us-east-1a,us-east-1b,us-east-1c,us-east-1d,us-east-1e,us-east-1f	
+VpcCidr	10.0.0.0/16	
+VpcId	vpc-0dc1165b5cbe13694
